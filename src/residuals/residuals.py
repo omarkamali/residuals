@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, asdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple, Union
 
 import torch
@@ -246,6 +246,6 @@ def _build_config(
         shapes_hash=shapes_hash,
         parameter_names_hash=names_hash,
         tokenizer_name=tokenizer_name,
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
         library={"package": "residuals"},
     )
