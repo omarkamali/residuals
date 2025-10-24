@@ -96,7 +96,7 @@ class Residuals:
             if base_model_name is None:
                 raise ValueError("Either base_model or base_model_name must be provided")
             base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name, dtype=dtype
+                base_model_name, torch_dtype=dtype
             )
             # Place on requested device if provided
             try:
@@ -109,7 +109,7 @@ class Residuals:
             if instruct_model_name is None:
                 raise ValueError("Either instruct_model or instruct_model_name must be provided")
             instruct_model = AutoModelForCausalLM.from_pretrained(
-                instruct_model_name, dtype=dtype
+                instruct_model_name, torch_dtype=dtype
             )
             try:
                 if device is not None:
