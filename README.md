@@ -243,6 +243,73 @@ Samsung paper (Table 3) shows:
 
 Higher-quality instruct models produce better residuals.
 
+## Model Card Auto-Generation (README.md)
+
+When you call `Residuals.save_pretrained(out_dir)`, a Hugging Face-ready `README.md` is automatically generated in `out_dir` with:
+
+- **Front-matter** including lineage and metadata:
+  - `base_model`: the base model repo ID
+  - `base_model_relation: adapter`
+  - `instruct_model`: the instruction-tuned model repo ID
+  - `pipeline_tag`, `tags`, `license`, `language`, and `library_name`
+- **Usage** section showing how to load and apply the residuals
+- **Files** and **Provenance** sections with hashes and creation info
+- **Tools** section referencing the PyPI package `residuals`
+
+Lineage fields are inferred even if you pass only model/tokenizer instances (no names):
+
+```python
+from residuals import Residuals
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+base = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B")
+inst = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+tok = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+
+res = Residuals.from_models(base_model=base, instruct_model=inst, instruct_tokenizer=tok)
+res.save_pretrained("./llama3_instruct_residuals")  # writes README.md with lineage
+```
+
+You can optionally set additional metadata before saving:
+
+```python
+res.config.license = "apache-2.0"
+res.config.language = "en"
+res.config.tags = ["residuals", "llama", "finetune"]
+```
+
+Under the hood, this behavior lives in:
+
+- `src/residuals/config.py`: `ResidualsConfig` dataclass
+- `src/residuals/metadata.py`: model/tokenizer name inference
+- `src/residuals/readme.py`: front-matter and README builders
+
+## Push to Hugging Face Hub
+
+You can push residuals to the Hub with one line. This publishes `model.safetensors`, `config.json`, tokenizer files, and an auto-generated `README.md`.
+
+```python
+from residuals import Residuals
+
+# ... compute or load residuals into `res`
+res.push_to_hub(
+    repo_id="your-username/llama3-8b-instruct-residuals",
+    private=True,   # set False to make public
+    token="hf_..."  # or rely on local HF auth
+)
+```
+
+Loading from the Hub is symmetric and compatible with `Residuals.from_pretrained()`:
+
+```python
+from residuals import Residuals
+
+res = Residuals.from_pretrained("your-username/llama3-8b-instruct-residuals")
+# If private, provide token:
+# res = Residuals.from_pretrained("your-username/llama3-8b-instruct-residuals", token="hf_...")
+```
+
+
 ## When to Use
 
 ✅ **Use instruction residuals when:**

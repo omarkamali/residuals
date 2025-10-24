@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "residuals"
-version = "0.2.0"
+version = "0.2.1"
 description = "Instruction residuals (task vectors) for efficient LLM continuous pre-training"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,6 +42,8 @@ classifiers = [
 dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
+    "huggingface_hub>=0.24.0",
+    "safetensors>=0.4.2",
 ]
 
 [project.optional-dependencies]

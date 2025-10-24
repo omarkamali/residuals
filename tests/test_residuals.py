@@ -93,6 +93,13 @@ def test_save_and_load_residuals(model_path: str):
         # Tokenizer artifacts should be present alongside residuals
         import os
         assert os.path.exists(os.path.join(tmpdir, "tokenizer_config.json"))
+        # README should be generated with HF front-matter
+        readme_path = os.path.join(tmpdir, "README.md")
+        assert os.path.exists(readme_path), "README.md not generated"
+        with open(readme_path, "r", encoding="utf-8") as fh:
+            readme = fh.read()
+        assert "base_model:" in readme, "README missing base_model front-matter"
+        assert "base_model_relation: adapter" in readme, "README missing base_model_relation: adapter"
 
         # Load and compare
         res2 = Residuals.from_pretrained(tmpdir)
