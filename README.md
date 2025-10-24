@@ -160,6 +160,52 @@ model = FastLanguageModel.get_peft_model(
 model.save_pretrained_merged("ckpts/final_model", tokenizer, save_method="merged_16bit")
 ```
 
+
+### GPU acceleration (optional)
+
+If you want faster residual computation/application on large models, install the optional GPU extras and set the device explicitly:
+
+```bash
+pip install -e .[gpu]
+```
+
+Then use `device="cuda"` when creating residuals from model names (instances you pass in are respected as-is):
+
+```python
+from residuals import Residuals
+
+res = Residuals.from_models(
+    base_model_name="meta-llama/Meta-Llama-3-8B",
+    instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    instruct_tokenizer_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    device="cuda",
+)
+```
+
+### Adjusting device/dtype after computing residuals
+
+You can cast or move residual tensors after computation using `.to(device=..., dtype=...)`:
+
+```python
+from residuals import Residuals
+from transformers import AutoModelForCausalLM
+import torch
+
+# Compute on CPU
+res = Residuals.from_models(
+    base_model_name="meta-llama/Meta-Llama-3-8B",
+    instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    instruct_tokenizer_name="meta-llama/Meta-Llama-3-8B-Instruct",
+)
+
+# Optionally cast/move residuals
+res_fp16 = res.to(dtype=torch.float16)            # cast to fp16
+# res_cuda = res.to(device="cuda", dtype=torch.float16)  # move and cast (requires GPU extras)
+
+base = AutoModelForCausalLM.from_pretrained("ckpts/base_cpt_fp16", dtype=torch.float32)
+res_fp16.apply(base, out_dir="ckpts/base_cpt_plus_instruct")
+```
+
 ## Mathematical Foundation
 
 **Instruction Residuals** (Equation 1 from Samsung paper):

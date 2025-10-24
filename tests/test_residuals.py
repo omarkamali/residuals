@@ -40,8 +40,8 @@ def test_calculate_and_apply_residuals(model_path: str):
     # Parametrized over architectures to validate both tied and non-tied embeddings
 
     # Create "base" and "instruct" models
-    model_base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
-    model_instruct = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
+    model_base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    model_instruct = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
 
     # Simulate instruction tuning by adding small delta
     with torch.no_grad():
@@ -54,7 +54,7 @@ def test_calculate_and_apply_residuals(model_path: str):
     assert len(res.state_dict) > 0, "Residuals should not be empty"
 
     # Create fresh base model for reconstruction
-    model_base_copy = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
+    model_base_copy = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
 
     # Apply residuals (Equation 2)
     res.apply(model_base_copy)
@@ -78,8 +78,8 @@ def test_save_and_load_residuals(model_path: str):
     # Parametrized model path
 
     # Create models with delta
-    model_a = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
-    model_b = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
+    model_a = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    model_b = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
 
     with torch.no_grad():
         for key, param in model_b.state_dict().items():
@@ -132,7 +132,7 @@ def test_residual_properties(model_path: str):
     assert mean_abs > 0, "Residuals should have non-zero magnitude"
 
     # Test negation: base + Θ_r - Θ_r = base
-    model_test = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
+    model_test = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
 
     # Apply residuals
     res.apply(model_test)
@@ -183,13 +183,40 @@ def test_from_models_with_names(model_path: str):
     assert len(res.state_dict) > 0
 
     # Apply to a freshly loaded base
-    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
     res.apply(base)
 
     # Since names are the same, residuals should be near zero; applying should keep model unchanged
     zero_like = Residuals.from_models(
-        base_model=AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True),
-        instruct_model=AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True),
+        base_model=AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32),
+        instruct_model=AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32),
     )
     max_abs = max(v.abs().max().item() for v in zero_like.state_dict.values())
     assert max_abs < 1e-6
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_residuals_to_changes_dtype_and_applies(model_path: str):
+    """Residuals.to should cast tensors and still apply correctly on CPU."""
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.01)
+
+    res = Residuals.from_models(base, inst, instruct_tokenizer_name=model_path)
+    res_fp16 = res.to(dtype=torch.float16)
+
+    # Ensure dtype changed for at least one tensor
+    any_fp16 = any(t.dtype == torch.float16 for t in res_fp16.state_dict.values())
+    assert any_fp16, "Residuals.to(dtype) did not change tensor dtype"
+
+    # Apply casted residuals to a fresh base and verify reconstruction still works
+    base_copy = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    res_fp16.apply(base_copy)
+
+    inst_sd = inst.state_dict()
+    recon_sd = base_copy.state_dict()
+    max_diff = max((inst_sd[k] - recon_sd[k]).abs().max().item() for k in inst_sd.keys())
+    assert max_diff < 1e-4

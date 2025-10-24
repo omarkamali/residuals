@@ -89,15 +89,19 @@ class Residuals:
         instruct_tokenizer: Optional[AutoTokenizer] = None,
         instruct_tokenizer_name: Optional[str] = None,
         dtype: torch.dtype = torch.float32,
+        device: Optional[Union[str, torch.device]] = "cpu",
     ) -> "Residuals":
         # Allow passing either models or names; load if names were provided
         if base_model is None:
             if base_model_name is None:
                 raise ValueError("Either base_model or base_model_name must be provided")
             base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name, dtype=dtype, low_cpu_mem_usage=True
+                base_model_name, dtype=dtype
             )
+            # Place on requested device if provided
             try:
+                if device is not None:
+                    base_model = base_model.to(device)
                 base_model = base_model.to(dtype=dtype)
             except Exception:
                 pass
@@ -105,9 +109,11 @@ class Residuals:
             if instruct_model_name is None:
                 raise ValueError("Either instruct_model or instruct_model_name must be provided")
             instruct_model = AutoModelForCausalLM.from_pretrained(
-                instruct_model_name, dtype=dtype, low_cpu_mem_usage=True
+                instruct_model_name, dtype=dtype
             )
             try:
+                if device is not None:
+                    instruct_model = instruct_model.to(device)
                 instruct_model = instruct_model.to(dtype=dtype)
             except Exception:
                 pass
@@ -224,6 +230,36 @@ class Residuals:
         self.instruct_tokenizer.save_pretrained(out_dir)
         with open(os.path.join(out_dir, "config.json"), "w", encoding="utf-8") as f:
             json.dump(asdict(self.config), f, indent=2)
+
+    def to(
+        self,
+        device: Optional[Union[str, torch.device]] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> "Residuals":
+        """Return a new Residuals instance with tensors moved/cast to device/dtype.
+
+        Does not modify the original instance.
+        """
+        new_state: Dict[str, torch.Tensor] = {}
+        for k, v in self.state_dict.items():
+            new_state[k] = v.to(device=device if device is not None else v.device, dtype=dtype if dtype is not None else v.dtype)
+
+        # Update config dtype string based on new tensors
+        names = sorted(new_state.keys())
+        dtypes = [str(new_state[n].dtype).split(".")[-1] for n in names]
+        dtype_str = max(set(dtypes), key=dtypes.count) if dtypes else "float32"
+        new_cfg = ResidualsConfig(
+            residuals_version=self.config.residuals_version,
+            format=self.config.format,
+            dtype=dtype_str,
+            param_count=self.config.param_count,
+            shapes_hash=self.config.shapes_hash,
+            parameter_names_hash=self.config.parameter_names_hash,
+            tokenizer_name=self.config.tokenizer_name,
+            created_at=self.config.created_at,
+            library=self.config.library,
+        )
+        return Residuals(new_state, new_cfg, instruct_tokenizer=self.instruct_tokenizer)
 
 
 def _build_config(
