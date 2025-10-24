@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "residuals"
-version = "0.1.0"
+version = "0.2.0"
 description = "Instruction residuals (task vectors) for efficient LLM continuous pre-training"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Omar Kamali", email = "residuals@omarkama.li"},
