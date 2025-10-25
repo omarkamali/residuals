@@ -250,7 +250,9 @@ class Residuals:
             json.dump(asdict(self.config), f, indent=2)
         readme_path = os.path.join(out_dir, "README.md")
         with open(readme_path, "w", encoding="utf-8") as f:
-            f.write(build_readme(self.config))
+            # Use folder name as the from_pretrained name in local saves
+            folder_name = os.path.basename(os.path.abspath(out_dir))
+            f.write(build_readme(self.config, repo_or_folder=folder_name))
 
     def to(
         self,
@@ -300,6 +302,10 @@ class Residuals:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self.save_pretrained(tmpdir)
+            # Overwrite README to reflect repo_id for hub usage
+            readme_path = os.path.join(tmpdir, "README.md")
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(build_readme(self.config, repo_or_folder=repo_id))
 
             api = HfApi()
             api.create_repo(

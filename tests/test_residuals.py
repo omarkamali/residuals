@@ -100,6 +100,9 @@ def test_save_and_load_residuals(model_path: str):
             readme = fh.read()
         assert "base_model:" in readme, "README missing base_model front-matter"
         assert "base_model_relation: adapter" in readme, "README missing base_model_relation: adapter"
+        # README usage should reference the folder name created by save_pretrained
+        folder_name = os.path.basename(tmpdir)
+        assert f'Residuals.from_pretrained("{folder_name}")' in readme
 
         # Load and compare
         res2 = Residuals.from_pretrained(tmpdir)

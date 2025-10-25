@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from .config import ResidualsConfig
 
@@ -47,7 +47,7 @@ Generated with the `residuals` Python package. Install via: `pip install residua
 """.strip()
 
 
-def build_readme(cfg: ResidualsConfig) -> str:
+def build_readme(cfg: ResidualsConfig, repo_or_folder: Optional[str] = None) -> str:
     fm = build_front_matter(cfg)
 
     lines: List[str] = [fm]
@@ -67,6 +67,7 @@ def build_readme(cfg: ResidualsConfig) -> str:
 
     lines.append("\n## Usage")
     py_base = cfg.base_model_name or "<base-model>"
+    name = repo_or_folder or "<repo-or-folder-name>"
     usage = f"""
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -75,7 +76,7 @@ from residuals import Residuals
 base = AutoModelForCausalLM.from_pretrained("{py_base}")
 tok = AutoTokenizer.from_pretrained("{py_base}")
 
-res = Residuals.from_pretrained(".")
+res = Residuals.from_pretrained("{name}")
 res.apply(base, base_tokenizer=tok)
 ```"""
     lines.append(usage.strip())

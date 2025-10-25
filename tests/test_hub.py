@@ -73,6 +73,10 @@ def test_push_to_hub_invokes_api(monkeypatch):
         assert os.path.exists(os.path.join(folder_path, "model.safetensors"))
         assert os.path.exists(os.path.join(folder_path, "config.json"))
         assert os.path.exists(os.path.join(folder_path, "README.md"))
+        # README usage should reference the repo id passed to push_to_hub
+        with open(os.path.join(folder_path, "README.md"), "r", encoding="utf-8") as fh:
+            readme = fh.read()
+        assert f'Residuals.from_pretrained("{repo_id}")' in readme
 
     monkeypatch.setenv("HF_HUB_DISABLE_TELEMETRY", "1")
     monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")

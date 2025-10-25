@@ -63,3 +63,4 @@ Thumbs.db
 residuals_cache/
 ckpts/
 outputs_*/
+.local
