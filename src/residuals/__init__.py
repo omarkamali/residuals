@@ -1,14 +1,12 @@
 """
 Instruction Residuals for LLM Continuous Pre-Training
-
-Based on Samsung Research 2024 paper and task arithmetic paradigm.
 """
 
 from .residuals import (
     Residuals,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.3"
 __author__ = "Omar Kamali"
 __email__ = "residuals@omarkama.li"
 
