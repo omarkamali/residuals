@@ -6,7 +6,7 @@ from .residuals import (
     Residuals,
 )
 
-__version__ = "0.2.3"
+__version__ = "0.3.0"
 __author__ = "Omar Kamali"
 __email__ = "residuals@omarkama.li"
 

@@ -69,7 +69,6 @@ delta_out = "./llama3_instruct_residuals"
 res = Residuals.from_models(
     base_model_name=base_path,
     instruct_model_name=instruct_path,
-    instruct_tokenizer_name=instruct_path,
     dtype=torch.float32,
 )
 res.save_pretrained(delta_out)
@@ -177,7 +176,6 @@ from residuals import Residuals
 res = Residuals.from_models(
     base_model_name="meta-llama/Meta-Llama-3-8B",
     instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
-    instruct_tokenizer_name="meta-llama/Meta-Llama-3-8B-Instruct",
     device="cuda",
 )
 ```
@@ -195,7 +193,6 @@ import torch
 res = Residuals.from_models(
     base_model_name="meta-llama/Meta-Llama-3-8B",
     instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
-    instruct_tokenizer_name="meta-llama/Meta-Llama-3-8B-Instruct",
 )
 
 # Optionally cast/move residuals
@@ -234,6 +231,36 @@ The implementation automatically:
 3. Resizes embeddings to match vocabulary
 4. **Zeros newly added embedding rows** to prevent contamination
 
+#### normalize_embeddings (default: True)
+
+- **What it does**: Ensures both models are in the same tokenizer space when computing residuals, and resizes the base model to the residuals' tokenizer at apply-time. This captures deltas for newly added tokens and avoids shape mismatches.
+- **Where**:
+  - `Residuals.from_models(..., normalize_embeddings=True)` resizes both base and instruct models to the instruct tokenizer before computing deltas. New embedding/output rows are zero-initialized so residuals include newly added tokens.
+  - `Residuals.apply(..., normalize_embeddings=True)` resizes the base model to match the saved tokenizer before applying deltas.
+- **If set to False**: You are responsible for ensuring both models already have matching shapes and tokenizer spaces. Otherwise, the library will raise with a helpful error suggesting to enable normalization or provide the instruct tokenizer.
+
+Examples:
+
+```python
+# During compute-time
+res = Residuals.from_models(
+    base_model_name="meta-llama/Meta-Llama-3-8B",
+    instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    normalize_embeddings=True,  # True by default
+)
+
+# During apply-time
+from transformers import AutoModelForCausalLM
+base = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B")
+res.apply(base, normalize_embeddings=True)  # default
+```
+
+If you disable normalization and shapes differ (e.g., tokenizer vocab differs), you will see an error like:
+
+```
+ValueError: Shape mismatch for transformer.wte.weight: param torch.Size([...]) vs delta torch.Size([...]). If tokenizers differ (e.g., added tokens), set normalize_embeddings=True or provide instruct_tokenizer/instruct_tokenizer_name to enable resizing.
+```
+
 ### Cross-Family Portability
 
 Samsung paper (Table 3) shows:
@@ -260,13 +287,12 @@ Lineage fields are inferred even if you pass only model/tokenizer instances (no 
 
 ```python
 from residuals import Residuals
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 base = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B")
 inst = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
-tok = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
 
-res = Residuals.from_models(base_model=base, instruct_model=inst, instruct_tokenizer=tok)
+res = Residuals.from_models(base_model=base, instruct_model=inst)
 res.save_pretrained("./llama3_instruct_residuals")  # writes README.md with lineage
 ```
 

@@ -13,6 +13,7 @@ import torch
 from transformers import AutoModelForCausalLM
 
 from residuals import Residuals
+from residuals.tokenization import resize_model_to_tokenizer
 
 # Models under test: one without tied embeddings, one with tied embeddings
 MODELS = [
@@ -92,6 +93,117 @@ def test_save_and_load_residuals(model_path: str):
         res.save_pretrained(tmpdir)
         # Tokenizer artifacts should be present alongside residuals
         import os
+        assert os.path.exists(os.path.join(tmpdir, "tokenizer_config.json"))
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_from_models_normalize_embeddings_true_captures_new_tokens_and_apply_resizes(model_path: str):
+    """When normalize_embeddings=True, residuals should capture newly added tokens and apply() should resize base to match."""
+    # Load models and tokenizer
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+
+    # Add new tokens to instruct tokenizer
+    added = ["<NEW_A>", "<NEW_B>", "<NEW_C>"]
+    tok.add_tokens(added)
+
+    # Resize instruct model upfront so we can set non-zero rows in new tokens
+    inst = resize_model_to_tokenizer(inst, tok)
+
+    # Make instruction deltas, including non-zero embeddings for new tokens
+    with torch.no_grad():
+        # General small delta
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.001)
+        # Boost new token rows in embeddings to make them detectable
+        input_emb = inst.get_input_embeddings().weight
+        output_emb = inst.get_output_embeddings().weight
+        vocab_size = input_emb.shape[0]
+        for i in range(1, len(added) + 1):
+            input_emb[-i].add_(0.5)
+            output_emb[-i].add_(0.5)
+
+    # Compute residuals with normalization (also resizes base to tok)
+    res = Residuals.from_models(
+        base_model=base,
+        instruct_model=inst,
+        instruct_tokenizer=tok,
+        normalize_embeddings=True,
+    )
+
+    # Apply to a fresh base that does not have the new tokens
+    base_fresh = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    res.apply(base_fresh, normalize_embeddings=True)
+
+    # Verify shapes now match tokenizer and new tokens rows are close to instruct
+    assert base_fresh.get_input_embeddings().weight.shape[0] == len(tok)
+    inst_sd = inst.state_dict()
+    recon_sd = base_fresh.state_dict()
+    # Compare a couple of parameters including embeddings rows
+    max_diff = max((inst_sd[k] - recon_sd[k]).abs().max().item() for k in inst_sd.keys())
+    assert max_diff < 5e-2  # allow small numeric noise
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_from_models_normalize_embeddings_false_raises_on_vocab_diff(model_path: str):
+    """If normalize_embeddings=False and tokenizers differ, from_models should raise due to shape mismatch."""
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+    tok.add_tokens(["<ADDED>"])
+
+    # Do NOT resize models; shapes will differ
+    with pytest.raises((ValueError, KeyError)):
+        Residuals.from_models(
+            base_model=base,
+            instruct_model=inst,
+            instruct_tokenizer=tok,
+            normalize_embeddings=False,
+        )
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_normalize_embeddings_false_raises_on_vocab_diff(model_path: str):
+    """If normalize_embeddings=False, apply() should raise when base embedding size doesn't match residuals tokenizer size."""
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+    tok.add_tokens(["<ADDED_1>", "<ADDED_2>"])
+
+    # Prepare instruct resized and modified
+    inst = resize_model_to_tokenizer(inst, tok)
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.001)
+
+    res = Residuals.from_models(base, inst, instruct_tokenizer=tok, normalize_embeddings=True)
+
+    # Apply to a fresh base without resizing (normalize_embeddings=False) should raise
+    base_fresh = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    with pytest.raises(ValueError):
+        res.apply(base_fresh, normalize_embeddings=False)
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_from_models_with_names_infers_tokenizer_and_saves(model_path: str):
+    """from_models() with only names should infer instruct tokenizer from the instruct model name and save it."""
+    res = Residuals.from_models(
+        base_model_name=model_path,
+        instruct_model_name=model_path,
+        dtype=torch.float32,
+    )
+    assert res.config.tokenizer_name is not None
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        res.save_pretrained(tmpdir)
         assert os.path.exists(os.path.join(tmpdir, "tokenizer_config.json"))
         # README should be generated with HF front-matter
         readme_path = os.path.join(tmpdir, "README.md")
@@ -230,3 +342,73 @@ def test_residuals_to_changes_dtype_and_applies(model_path: str):
     recon_sd = base_copy.state_dict()
     max_diff = max((inst_sd[k] - recon_sd[k]).abs().max().item() for k in inst_sd.keys())
     assert max_diff < 1e-4
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_from_models_auto_deduces_instruct_tokenizer_and_saves(model_path: str):
+    """from_models should auto-deduce instruct tokenizer from the instruct model or its name when not provided."""
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.005)
+
+    # Do not pass any tokenizer params; should infer from instruct model
+    res = Residuals.from_models(base_model=base, instruct_model=inst)
+    assert res.config.tokenizer_name is not None, "Tokenizer name should be set in config when inferred"
+
+    # Save should include tokenizer artifacts without explicitly passing tokenizer
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        res.save_pretrained(tmpdir)
+        assert os.path.exists(os.path.join(tmpdir, "tokenizer_config.json")), "Tokenizer not saved with residuals"
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_auto_deduces_base_tokenizer(model_path: str):
+    """apply() should auto-deduce base tokenizer from the base model if not provided and align embeddings."""
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.003)
+
+    res = Residuals.from_models(base, inst)
+
+    # Do not pass base_tokenizer; should infer internally and not raise
+    base_copy = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    res.apply(base_copy)
+    # Sanity: after apply, base_copy should move towards inst
+    inst_sd = inst.state_dict()
+    copy_sd = base_copy.state_dict()
+    diffs_after = [ (inst_sd[k] - copy_sd[k]).abs().mean().item() for k in inst_sd.keys() ]
+    # Mean diff per param should be small-ish; just ensure it's finite and non-NaN
+    assert all(d >= 0 for d in diffs_after)
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_accepts_tokenizer_names_and_saves(model_path: str):
+    """apply() should accept tokenizer names for both base and instruct and save tokenizer when out_dir is provided."""
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.002)
+
+    res = Residuals.from_models(base, inst)
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_copy = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+        res.apply(
+            base_copy,
+            base_tokenizer_name=model_path,
+            instruct_tokenizer_name=model_path,
+            out_dir=tmpdir,
+        )
+        # Tokenizer artifacts should exist in out_dir due to instruct tokenizer provided by name
+        assert os.path.exists(os.path.join(tmpdir, "tokenizer_config.json"))

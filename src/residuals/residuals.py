@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from .config import ResidualsConfig, build_config
 from .metadata import infer_model_name, infer_tokenizer_name
 from .readme import build_readme
-from .tokenization import align_tokenizer_and_embeddings
+from .tokenization import align_tokenizer_and_embeddings, resize_model_to_tokenizer
 
 # Optional Hub imports at module level for easier monkeypatching in tests
 try:  # pragma: no cover - handled in tests via monkeypatch
@@ -44,9 +44,6 @@ def _download_from_hub(repo_id: str, token: Optional[str] = None) -> str:
     return snapshot_download(repo_id=repo_id, token=token)
 
 
-# ResidualsConfig moved to config.py
-
-
 class Residuals:
     """Container for instruction residuals with load/save/apply ergonomics."""
 
@@ -65,6 +62,7 @@ class Residuals:
         instruct_tokenizer_name: Optional[str] = None,
         dtype: torch.dtype = torch.float32,
         device: Optional[Union[str, torch.device]] = "cpu",
+        normalize_embeddings: bool = True,
     ) -> "Residuals":
         # Allow passing either models or names; load if names were provided
         if base_model is None:
@@ -93,6 +91,46 @@ class Residuals:
             except Exception:
                 pass
 
+        # Determine instruct tokenizer: auto-deduce from instruct model if not provided
+        tok = instruct_tokenizer
+        if tok is None:
+            if instruct_tokenizer_name is not None:
+                tok = AutoTokenizer.from_pretrained(instruct_tokenizer_name, use_fast=False)
+            else:
+                # Try to infer from instruct model (preferred) or its name
+                inferred_name = instruct_model_name if instruct_model_name is not None else (
+                    infer_model_name(instruct_model) if instruct_model is not None else None
+                )
+                if inferred_name is not None:
+                    try:
+                        tok = AutoTokenizer.from_pretrained(inferred_name, use_fast=False)
+                        instruct_tokenizer_name = infer_tokenizer_name(tok)
+                    except Exception:
+                        tok = None
+        if instruct_tokenizer_name is None and tok is not None:
+            instruct_tokenizer_name = infer_tokenizer_name(tok)
+
+        # If requested, normalize both models to the instruct tokenizer space
+        if normalize_embeddings and tok is not None:
+            try:
+                base_model = resize_model_to_tokenizer(base_model, tok)
+            except Exception:
+                pass
+            try:
+                instruct_model = resize_model_to_tokenizer(instruct_model, tok)
+            except Exception:
+                pass
+        elif (not normalize_embeddings) and tok is not None:
+            # Enforce that both models already match the tokenizer space
+            vocab_len = len(tok)
+            b_len = base_model.get_input_embeddings().weight.shape[0]
+            i_len = instruct_model.get_input_embeddings().weight.shape[0]
+            if b_len != vocab_len or i_len != vocab_len:
+                raise ValueError(
+                    f"Tokenizer vocab length ({vocab_len}) does not match model embedding sizes (base={b_len}, instruct={i_len})."
+                    " Set normalize_embeddings=True to auto-resize."
+                )
+
         base_sd = base_model.state_dict()
         inst_sd = instruct_model.state_dict()
         state: Dict[str, torch.Tensor] = {}
@@ -110,13 +148,6 @@ class Residuals:
             base_model_name = infer_model_name(base_model)
         if instruct_model_name is None and instruct_model is not None:
             instruct_model_name = infer_model_name(instruct_model)
-
-        # Determine instruct tokenizer
-        tok = instruct_tokenizer
-        if tok is None and instruct_tokenizer_name is not None:
-            tok = AutoTokenizer.from_pretrained(instruct_tokenizer_name, use_fast=False)
-        if instruct_tokenizer_name is None and tok is not None:
-            instruct_tokenizer_name = infer_tokenizer_name(tok)
 
         tok_name = instruct_tokenizer_name
         cfg = build_config(
@@ -179,28 +210,72 @@ class Residuals:
         base_model: AutoModelForCausalLM,
         base_tokenizer: Optional[AutoTokenizer] = None,
         instruct_tokenizer: Optional[AutoTokenizer] = None,
+        base_tokenizer_name: Optional[str] = None,
+        instruct_tokenizer_name: Optional[str] = None,
         out_dir: Optional[str] = None,
         scale: float = 1.0,
+        normalize_embeddings: bool = True,
     ) -> AutoModelForCausalLM:
-        # Prefer provided instruct_tokenizer; else fall back to stored one
-        if instruct_tokenizer is None and self.instruct_tokenizer is not None:
-            instruct_tokenizer = self.instruct_tokenizer
+        # Resolve instruct tokenizer: prefer instance, then name, then stored
+        if instruct_tokenizer is None:
+            if instruct_tokenizer_name is not None:
+                try:
+                    instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_name, use_fast=False)
+                except Exception:
+                    instruct_tokenizer = None
+            elif self.instruct_tokenizer is not None:
+                instruct_tokenizer = self.instruct_tokenizer
+            elif getattr(self.config, "tokenizer_name", None):
+                try:
+                    instruct_tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_name, use_fast=False)
+                except Exception:
+                    instruct_tokenizer = None
 
-        if base_tokenizer is not None and instruct_tokenizer is not None:
-            base_model, base_tokenizer = align_tokenizer_and_embeddings(
-                base_model, base_tokenizer
-            )
+        # Resolve base tokenizer: prefer instance, then name, else infer from model
+        if base_tokenizer is None:
+            if base_tokenizer_name is not None:
+                try:
+                    base_tokenizer = AutoTokenizer.from_pretrained(base_tokenizer_name, use_fast=False)
+                except Exception:
+                    base_tokenizer = None
+            else:
+                base_name = infer_model_name(base_model)
+                if base_name is not None:
+                    try:
+                        base_tokenizer = AutoTokenizer.from_pretrained(base_name, use_fast=False)
+                    except Exception:
+                        base_tokenizer = None
+
+        # If requested and we have an instruct tokenizer, resize base to match saved tokenizer
+        if normalize_embeddings and instruct_tokenizer is not None:
+            try:
+                base_model = resize_model_to_tokenizer(base_model, instruct_tokenizer)
+            except Exception:
+                pass
+        else:
+            # Align embeddings only when both tokenizers are available AND
+            # base lacks PAD while instruct has PAD. This prevents unintended vocab growth.
+            if (
+                base_tokenizer is not None
+                and instruct_tokenizer is not None
+                and getattr(base_tokenizer, "pad_token", None) is None
+                and getattr(instruct_tokenizer, "pad_token", None) is not None
+            ):
+                base_model, base_tokenizer = align_tokenizer_and_embeddings(base_model, base_tokenizer)
+
+        state_for_apply: Dict[str, torch.Tensor] = self.state_dict
 
         groups: Dict[int, Dict[str, torch.Tensor]] = {}
         tensors_by_ptr: Dict[int, torch.Tensor] = {}
 
         for n, p in base_model.named_parameters():
-            if n not in self.state_dict:
+            if n not in state_for_apply:
                 raise KeyError(f"Residuals missing key: {n}")
-            delta = self.state_dict[n]
+            delta = state_for_apply[n]
             if delta.shape != p.shape:
                 raise ValueError(
-                    f"Shape mismatch for {n}: param {p.shape} vs delta {delta.shape}"
+                    f"Shape mismatch for {n}: param {p.shape} vs delta {delta.shape}. "
+                    f"If tokenizers differ (e.g., added tokens), set normalize_embeddings=True or provide instruct_tokenizer/instruct_tokenizer_name to enable resizing."
                 )
             try:
                 ptr = p.data_ptr()
@@ -221,11 +296,12 @@ class Residuals:
                 t.add_(total_delta)
 
         for n, b in base_model.named_buffers():
-            if n in self.state_dict:
-                d = self.state_dict[n]
+            if n in state_for_apply:
+                d = state_for_apply[n]
                 if d.shape != b.shape:
                     raise ValueError(
-                        f"Shape mismatch for buffer {n}: param {b.shape} vs delta {d.shape}"
+                        f"Shape mismatch for buffer {n}: param {b.shape} vs delta {d.shape}. "
+                        f"If tokenizers differ (e.g., added tokens), set normalize_embeddings=True or provide instruct_tokenizer/instruct_tokenizer_name to enable resizing."
                     )
                 with torch.no_grad():
                     b.add_((d * scale).to(b.dtype))

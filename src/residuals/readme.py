@@ -70,14 +70,13 @@ def build_readme(cfg: ResidualsConfig, repo_or_folder: Optional[str] = None) -> 
     name = repo_or_folder or "<repo-or-folder-name>"
     usage = f"""
 ```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 from residuals import Residuals
 
 base = AutoModelForCausalLM.from_pretrained("{py_base}")
-tok = AutoTokenizer.from_pretrained("{py_base}")
 
 res = Residuals.from_pretrained("{name}")
-res.apply(base, base_tokenizer=tok)
+res.apply(base)
 ```"""
     lines.append(usage.strip())
 

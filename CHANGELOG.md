@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-10-26
+
+### Added
+- `normalize_embeddings` parameter (default: true) in `Residuals.from_models()` and `Residuals.apply()` to normalize models to a shared tokenizer space.
+  - Compute-time: resize base and instruct to the instruct tokenizer so residuals capture newly added tokens (zero-initialized new rows).
+  - Apply-time: resize base to the saved tokenizer before applying residuals.
+
+### Improved
+- Clear error messages on shape mismatches suggesting enabling `normalize_embeddings=True` or providing `instruct_tokenizer`/`instruct_tokenizer_name`.
+
+
 ## [0.2.3] - 2025-10-26
 
 ### Fixed
