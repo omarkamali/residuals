@@ -137,6 +137,28 @@ res.apply(
 
 **Result**: Your model now has both domain knowledge from CPT AND instruction-following capabilities—with ~2000x less compute than full instruction tuning.
 
+##### Shorthand: apply by names/paths
+
+You can do the same in one line by passing names/paths directly:
+
+```python
+from residuals import Residuals
+
+merged = Residuals.apply_to_pretrained(
+    model="ckpts/base_cpt_fp16",           # base model name/path
+    residuals=delta_out,                    # residuals repo or local folder
+    out_dir="ckpts/base_cpt_plus_instruct",
+    normalize_embeddings=True,
+)
+```
+
+Or, from an instance, let `apply()` load the base by name:
+
+```python
+res = Residuals.from_pretrained(delta_out)
+merged = res.apply(base_model_name="ckpts/base_cpt_fp16", model_dtype=torch.float32)
+```
+
 #### 4. (Optional) Task-Specific SFT
 
 ```python

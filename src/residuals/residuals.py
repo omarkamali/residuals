@@ -23,6 +23,21 @@ from .metadata import infer_model_name, infer_tokenizer_name
 from .readme import build_readme
 from .tokenization import align_tokenizer_and_embeddings, resize_model_to_tokenizer
 
+def _load_causal_lm(
+    name_or_path: str,
+    *,
+    dtype: torch.dtype = torch.float32,
+    device: Optional[Union[str, torch.device]] = "cpu",
+) -> AutoModelForCausalLM:
+    model = AutoModelForCausalLM.from_pretrained(name_or_path, torch_dtype=dtype)
+    try:
+        if device is not None:
+            model = model.to(device)
+        model = model.to(dtype=dtype)
+    except Exception:
+        pass
+    return model
+
 # Optional Hub imports at module level for easier monkeypatching in tests
 try:  # pragma: no cover - handled in tests via monkeypatch
     from huggingface_hub import HfApi, upload_folder, snapshot_download
@@ -53,6 +68,34 @@ class Residuals:
         self.instruct_tokenizer = instruct_tokenizer
 
     @staticmethod
+    def apply_to_pretrained(
+        model: str,
+        residuals: str,
+        *,
+        out_dir: Optional[str] = None,
+        scale: float = 1.0,
+        normalize_embeddings: bool = True,
+        dtype: torch.dtype = torch.float32,
+        device: Optional[Union[str, torch.device]] = "cpu",
+        map_location: Union[str, torch.device] = "cpu",
+        token: Optional[str] = None,
+        base_tokenizer_name: Optional[str] = None,
+        instruct_tokenizer_name: Optional[str] = None,
+    ) -> AutoModelForCausalLM:
+        base_model = _load_causal_lm(model, dtype=dtype, device=device)
+        res = Residuals.from_pretrained(residuals, map_location=map_location, token=token)
+        return res.apply(
+            base_model,
+            base_tokenizer=None,
+            instruct_tokenizer=None,
+            base_tokenizer_name=base_tokenizer_name,
+            instruct_tokenizer_name=instruct_tokenizer_name,
+            out_dir=out_dir,
+            scale=scale,
+            normalize_embeddings=normalize_embeddings,
+        )
+
+    @staticmethod
     def from_models(
         base_model: Optional[AutoModelForCausalLM] = None,
         instruct_model: Optional[AutoModelForCausalLM] = None,
@@ -68,28 +111,11 @@ class Residuals:
         if base_model is None:
             if base_model_name is None:
                 raise ValueError("Either base_model or base_model_name must be provided")
-            base_model = AutoModelForCausalLM.from_pretrained(
-                base_model_name, torch_dtype=dtype
-            )
-            # Place on requested device if provided
-            try:
-                if device is not None:
-                    base_model = base_model.to(device)
-                base_model = base_model.to(dtype=dtype)
-            except Exception:
-                pass
+            base_model = _load_causal_lm(base_model_name, dtype=dtype, device=device)
         if instruct_model is None:
             if instruct_model_name is None:
                 raise ValueError("Either instruct_model or instruct_model_name must be provided")
-            instruct_model = AutoModelForCausalLM.from_pretrained(
-                instruct_model_name, torch_dtype=dtype
-            )
-            try:
-                if device is not None:
-                    instruct_model = instruct_model.to(device)
-                instruct_model = instruct_model.to(dtype=dtype)
-            except Exception:
-                pass
+            instruct_model = _load_causal_lm(instruct_model_name, dtype=dtype, device=device)
 
         # Determine instruct tokenizer: auto-deduce from instruct model if not provided
         tok = instruct_tokenizer
@@ -207,7 +233,7 @@ class Residuals:
 
     def apply(
         self,
-        base_model: AutoModelForCausalLM,
+        base_model: Optional[AutoModelForCausalLM] = None,
         base_tokenizer: Optional[AutoTokenizer] = None,
         instruct_tokenizer: Optional[AutoTokenizer] = None,
         base_tokenizer_name: Optional[str] = None,
@@ -215,7 +241,15 @@ class Residuals:
         out_dir: Optional[str] = None,
         scale: float = 1.0,
         normalize_embeddings: bool = True,
+        base_model_name: Optional[str] = None,
+        model_dtype: torch.dtype = torch.float32,
+        base_model_device: Optional[Union[str, torch.device]] = "cpu",
     ) -> AutoModelForCausalLM:
+        # Optionally load the base model if not provided
+        if base_model is None:
+            if base_model_name is None:
+                raise ValueError("Either base_model must be provided or base_model_name must be set")
+            base_model = _load_causal_lm(base_model_name, dtype=model_dtype, device=base_model_device)
         # Resolve instruct tokenizer: prefer instance, then name, then stored
         if instruct_tokenizer is None:
             if instruct_tokenizer_name is not None:
@@ -267,6 +301,38 @@ class Residuals:
 
         groups: Dict[int, Dict[str, torch.Tensor]] = {}
         tensors_by_ptr: Dict[int, torch.Tensor] = {}
+
+        # Heuristic: detect adapter-wrapped (e.g., PEFT/LoRA) models and provide a useful hint
+        try:
+            base_param_names = [n for n, _ in base_model.named_parameters()]
+            lora_like = sum((".lora_" in n) or (".adalora_" in n) for n in base_param_names)
+            base_layer_like = sum(".base_layer.weight" in n for n in base_param_names)
+            res_keys = set(state_for_apply.keys())
+            missing = [n for n in base_param_names if n not in res_keys]
+
+            example_missing = next((n for n in missing if n.endswith(".base_layer.weight")), None)
+            candidate_key = None
+            if example_missing is not None:
+                candidate_key = example_missing.replace(".base_layer.weight", ".weight")
+
+            # If we see adapter patterns and a majority of base params are missing, give a tailored hint
+            if (lora_like > 0 or base_layer_like > 0) and len(base_param_names) > 0 and (len(missing) / max(1, len(base_param_names))) > 0.3:
+                if example_missing is not None and candidate_key in res_keys:
+                    raise KeyError(
+                        "Residuals appear to be built for a plain base model, but the provided base model has adapter-wrapped parameters (e.g., '.base_layer.weight' / 'lora_*'). "
+                        f"Example: missing '{example_missing}', while residuals contain '{candidate_key}'. "
+                        f"Counts — base params: {len(base_param_names)}, with '.base_layer.weight': {base_layer_like}, lora-like: {lora_like}. "
+                        "Fix: merge and unload adapters before applying (e.g., model = model.merge_and_unload()), or load the clean base model matching res.config.base_model_name, then apply residuals."
+                    )
+                elif lora_like > 0 or base_layer_like > 0:
+                    raise KeyError(
+                        "Residuals appear to be built for a plain base model, but the provided base model has adapter-wrapped parameters ('.base_layer.weight' / 'lora_*'). "
+                        f"Counts — base params: {len(base_param_names)}, with '.base_layer.weight': {base_layer_like}, lora-like: {lora_like}. "
+                        "Fix: merge and unload adapters before applying (e.g., model = model.merge_and_unload()), or load the clean base model matching res.config.base_model_name, then apply residuals."
+                    )
+        except Exception:
+            # Best-effort hint; fall back silently if any inspection fails
+            pass
 
         for n, p in base_model.named_parameters():
             if n not in state_for_apply:

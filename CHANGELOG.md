@@ -1,9 +1,9 @@
 # Changelog
+## [0.3.1] - 2025-10-30
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### Added
+- `Residuals.apply_to_pretrained(model, residuals, ...)`: shorthand to load a base model and residuals by name/path and apply in one call. Parameters use simple names `model` and `residuals`.
+- `Residuals.apply(...)` now optionally accepts `base_model_name` and `model_dtype` to load the base model directly if an instance isn't provided.
 
 ## [0.3.0] - 2025-10-26
 

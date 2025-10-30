@@ -412,3 +412,54 @@ def test_apply_accepts_tokenizer_names_and_saves(model_path: str):
         )
         # Tokenizer artifacts should exist in out_dir due to instruct tokenizer provided by name
         assert os.path.exists(os.path.join(tmpdir, "tokenizer_config.json"))
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_with_base_model_name_and_model_dtype(model_path: str):
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.003)
+
+    res = Residuals.from_models(base, inst, instruct_tokenizer_name=model_path)
+
+    merged = res.apply(
+        base_model=None,
+        base_model_name=model_path,
+        model_dtype=torch.float32,
+        normalize_embeddings=True,
+    )
+
+    inst_sd = inst.state_dict()
+    merged_sd = merged.state_dict()
+    max_diff = max((inst_sd[k] - merged_sd[k]).abs().max().item() for k in inst_sd.keys())
+    assert max_diff < 1e-4
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_to_pretrained_end_to_end(model_path: str):
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.0025)
+
+    res = Residuals.from_models(base, inst, instruct_tokenizer_name=model_path)
+
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as tmpdir:
+        res.save_pretrained(tmpdir)
+        merged = Residuals.apply_to_pretrained(
+            model=model_path,
+            residuals=tmpdir,
+            normalize_embeddings=True,
+            dtype=torch.float32,
+            device="cpu",
+        )
+        inst_sd = inst.state_dict()
+        merged_sd = merged.state_dict()
+        max_diff = max((inst_sd[k] - merged_sd[k]).abs().max().item() for k in inst_sd.keys())
+        assert max_diff < 1e-4
