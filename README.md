@@ -431,14 +431,28 @@ If you use this package in your research, please cite:
   author = {Kamali, Omar},
   title = {Residuals: Instruction Residuals for Efficient LLM CPT},
   year = {2025},
-  url = {https://github.com/omarkamali/residuals}
+  url = {https://github.com/omarkamali/residuals},
+  doi = {10.5281/zenodo.17488892}
 }
 
-@article{jindal2024balancing,
-  title={Balancing Continuous Pre-Training and Instruction Fine-Tuning},
-  author={Jindal, Ishan and others},
-  journal={arXiv preprint arXiv:2410.10739},
-  year={2024}
+@misc{jindal2024balancingcontinuouspretraininginstruction,
+      title={Balancing Continuous Pre-Training and Instruction Fine-Tuning: Optimizing Instruction-Following in LLMs}, 
+      author={Ishan Jindal and Chandana Badrinath and Pranjal Bharti and Lakkidi Vinay and Sachin Dev Sharma},
+      year={2024},
+      eprint={2410.10739},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2410.10739}, 
+}
+
+@misc{ilharco2023editingmodelstaskarithmetic,
+      title={Editing Models with Task Arithmetic}, 
+      author={Gabriel Ilharco and Marco Tulio Ribeiro and Mitchell Wortsman and Suchin Gururangan and Ludwig Schmidt and Hannaneh Hajishirzi and Ali Farhadi},
+      year={2023},
+      eprint={2212.04089},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2212.04089}, 
 }
 ```
 
