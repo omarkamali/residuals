@@ -109,11 +109,6 @@ def main() -> int:
         return 1
     print(f"✅ Git tag {tag} exists.")
 
-    print("📦 Running hatch publish...")
-    run(["hatch", "clean"])  # clean build artifacts
-    run(["hatch", "build"])  # build
-    run(["hatch", "publish"])  # publish to PyPI
-
     print(f"🚀 Creating GitHub Release {tag}...")
     ensure_gh_cli()
 
