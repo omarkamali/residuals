@@ -192,11 +192,11 @@ def test_apply_normalize_embeddings_false_raises_on_vocab_diff(model_path: str):
 
 
 @pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
-def test_from_models_with_names_infers_tokenizer_and_saves(model_path: str):
-    """from_models() with only names should infer instruct tokenizer from the instruct model name and save it."""
+def test_from_models_with_strings_infers_tokenizer_and_saves(model_path: str):
+    """from_models() with only string IDs/paths should infer instruct tokenizer and save it."""
     res = Residuals.from_models(
-        base_model_name=model_path,
-        instruct_model_name=model_path,
+        base_model=model_path,
+        instruct_model=model_path,
         dtype=torch.float32,
     )
     assert res.config.tokenizer_name is not None
@@ -293,12 +293,12 @@ def test_shape_mismatch_raises(model_path: str):
 
 
 @pytest.mark.parametrize("model_path", MODELS)
-def test_from_models_with_names(model_path: str):
-    """Ensure from_models can accept model names/paths and still reconstruct."""
-    # Use names to compute residuals
+def test_from_models_with_strings(model_path: str):
+    """Ensure from_models can accept string model IDs/paths and still reconstruct."""
+    # Use string args to compute residuals
     res = Residuals.from_models(
-        base_model_name=model_path,
-        instruct_model_name=model_path,
+        base_model=model_path,
+        instruct_model=model_path,
         dtype=torch.float32,
     )
 
@@ -342,6 +342,86 @@ def test_residuals_to_changes_dtype_and_applies(model_path: str):
     recon_sd = base_copy.state_dict()
     max_diff = max((inst_sd[k] - recon_sd[k]).abs().max().item() for k in inst_sd.keys())
     assert max_diff < 1e-4
+
+
+def test_from_pretrained_uses_local_path_directly(monkeypatch):
+    """from_pretrained should not attempt hub download when given a local path."""
+    # Create a real saved residuals folder
+    base = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2", dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2", dtype=torch.float32)
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.001)
+    res = Residuals.from_models(base, inst, instruct_tokenizer_name="sshleifer/tiny-gpt2")
+
+    called = {"download": False}
+    import residuals.residuals as rmod
+    def fake_download(repo_id: str, token=None) -> str:  # pragma: no cover - safety
+        called["download"] = True
+        return repo_id
+    monkeypatch.setattr(rmod, "_download_from_hub", fake_download)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        res.save_pretrained(tmpdir)
+        _ = Residuals.from_pretrained(tmpdir)
+    assert called["download"] is False
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_from_models_accepts_polymorphic_args(model_path: str):
+    """from_models should accept strings (paths/ids) and model instances interchangeably."""
+    base_inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst_inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    with torch.no_grad():
+        for _, p in inst_inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.001)
+    # mix: base as string, instruct as instance
+    res1 = Residuals.from_models(base_model=model_path, instruct_model=inst_inst)
+    assert len(res1.state_dict) > 0
+    # mix: base as instance, instruct as string
+    res2 = Residuals.from_models(base_model=base_inst, instruct_model=model_path)
+    assert len(res2.state_dict) > 0
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_accepts_string_base_model(model_path: str):
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.001)
+    res = Residuals.from_models(base, inst, instruct_tokenizer_name=model_path)
+    merged = res.apply(base_model=model_path, normalize_embeddings=True)
+    inst_sd = inst.state_dict()
+    merged_sd = merged.state_dict()
+    max_diff = max((inst_sd[k] - merged_sd[k]).abs().max().item() for k in inst_sd.keys())
+    assert max_diff < 1e-4
+
+
+@pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
+def test_apply_to_pretrained_accepts_model_instance(model_path: str):
+    base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
+    with torch.no_grad():
+        for _, p in inst.state_dict().items():
+            p.add_(torch.randn_like(p) * 0.002)
+    res = Residuals.from_models(base, inst, instruct_tokenizer_name=model_path)
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as tmpdir:
+        res.save_pretrained(tmpdir)
+        merged = Residuals.apply_to_pretrained(
+            model=AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32),
+            residuals=tmpdir,
+            normalize_embeddings=True,
+        )
+        inst_sd = inst.state_dict()
+        merged_sd = merged.state_dict()
+        max_diff = max((inst_sd[k] - merged_sd[k]).abs().max().item() for k in inst_sd.keys())
+        assert max_diff < 1e-4
+
+
+    
 
 
 @pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
@@ -415,7 +495,7 @@ def test_apply_accepts_tokenizer_names_and_saves(model_path: str):
 
 
 @pytest.mark.parametrize("model_path", MODELS_WITH_TOKENIZER)
-def test_apply_with_base_model_name_and_model_dtype(model_path: str):
+def test_apply_with_string_base_model_and_model_dtype(model_path: str):
     base = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
     inst = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32)
 
@@ -426,8 +506,7 @@ def test_apply_with_base_model_name_and_model_dtype(model_path: str):
     res = Residuals.from_models(base, inst, instruct_tokenizer_name=model_path)
 
     merged = res.apply(
-        base_model=None,
-        base_model_name=model_path,
+        base_model=model_path,
         model_dtype=torch.float32,
         normalize_embeddings=True,
     )

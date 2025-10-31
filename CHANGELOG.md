@@ -1,4 +1,16 @@
 # Changelog
+## [0.3.2] - 2025-10-31
+
+### Added
+- Local filesystem path support in `Residuals.from_pretrained(...)` without passing through Hugging Face repo ID validation.
+- Polymorphic parameters for models:
+  - `Residuals.from_models(base_model=..., instruct_model=...)` now accepts either strings (hub IDs or local paths) or model instances.
+  - `Residuals.apply(base_model=...)` now accepts either a model instance or a string (hub ID or local path).
+  - `Residuals.apply_to_pretrained(model=...)` now accepts either a model instance or a string.
+
+### Tooling
+- Added a Python publish script with a helper to extract the latest CHANGELOG section for GitHub release notes.
+
 ## [0.3.1] - 2025-10-30
 
 ### Added

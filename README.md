@@ -60,15 +60,15 @@ from residuals import Residuals
 from transformers import AutoModelForCausalLM
 import torch
 
-# Paths to your base and instruction-tuned models
+# Paths to your base and instruction-tuned models (local or hub IDs)
 base_path = "meta-llama/Meta-Llama-3-8B"
 instruct_path = "meta-llama/Meta-Llama-3-8B-Instruct"
 delta_out = "./llama3_instruct_residuals"
 
 # Compute residuals (Θ_r = θ_instruct - θ_base) and persist tokenizer
 res = Residuals.from_models(
-    base_model_name=base_path,
-    instruct_model_name=instruct_path,
+    base_model=base_path,            # accepts str path/ID or model instance
+    instruct_model=instruct_path,    # accepts str path/ID or model instance
     dtype=torch.float32,
 )
 res.save_pretrained(delta_out)
@@ -156,7 +156,7 @@ Or, from an instance, let `apply()` load the base by name:
 
 ```python
 res = Residuals.from_pretrained(delta_out)
-merged = res.apply(base_model_name="ckpts/base_cpt_fp16", model_dtype=torch.float32)
+merged = res.apply(base_model="ckpts/base_cpt_fp16", model_dtype=torch.float32)
 ```
 
 #### 4. (Optional) Task-Specific SFT
@@ -196,8 +196,8 @@ Then use `device="cuda"` when creating residuals from model names (instances you
 from residuals import Residuals
 
 res = Residuals.from_models(
-    base_model_name="meta-llama/Meta-Llama-3-8B",
-    instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    base_model="meta-llama/Meta-Llama-3-8B",
+    instruct_model="meta-llama/Meta-Llama-3-8B-Instruct",
     device="cuda",
 )
 ```
@@ -213,8 +213,8 @@ import torch
 
 # Compute on CPU
 res = Residuals.from_models(
-    base_model_name="meta-llama/Meta-Llama-3-8B",
-    instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    base_model="meta-llama/Meta-Llama-3-8B",
+    instruct_model="meta-llama/Meta-Llama-3-8B-Instruct",
 )
 
 # Optionally cast/move residuals
@@ -266,8 +266,8 @@ Examples:
 ```python
 # During compute-time
 res = Residuals.from_models(
-    base_model_name="meta-llama/Meta-Llama-3-8B",
-    instruct_model_name="meta-llama/Meta-Llama-3-8B-Instruct",
+    base_model="meta-llama/Meta-Llama-3-8B",
+    instruct_model="meta-llama/Meta-Llama-3-8B-Instruct",
     normalize_embeddings=True,  # True by default
 )
 

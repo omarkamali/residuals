@@ -38,6 +38,17 @@ def _load_causal_lm(
         pass
     return model
 
+def _is_local_path(path: str) -> bool:
+    try:
+        return (
+            os.path.isabs(path)
+            or path.startswith("./")
+            or path.startswith("../")
+            or os.path.exists(path)
+        )
+    except Exception:
+        return False
+
 # Optional Hub imports at module level for easier monkeypatching in tests
 try:  # pragma: no cover - handled in tests via monkeypatch
     from huggingface_hub import HfApi, upload_folder, snapshot_download
@@ -69,7 +80,7 @@ class Residuals:
 
     @staticmethod
     def apply_to_pretrained(
-        model: str,
+        model: Union[str, AutoModelForCausalLM],
         residuals: str,
         *,
         out_dir: Optional[str] = None,
@@ -82,7 +93,11 @@ class Residuals:
         base_tokenizer_name: Optional[str] = None,
         instruct_tokenizer_name: Optional[str] = None,
     ) -> AutoModelForCausalLM:
-        base_model = _load_causal_lm(model, dtype=dtype, device=device)
+        base_model = (
+            _load_causal_lm(model, dtype=dtype, device=device)
+            if isinstance(model, str)
+            else model
+        )
         res = Residuals.from_pretrained(residuals, map_location=map_location, token=token)
         return res.apply(
             base_model,
@@ -97,10 +112,8 @@ class Residuals:
 
     @staticmethod
     def from_models(
-        base_model: Optional[AutoModelForCausalLM] = None,
-        instruct_model: Optional[AutoModelForCausalLM] = None,
-        base_model_name: Optional[str] = None,
-        instruct_model_name: Optional[str] = None,
+        base_model: Optional[Union[str, AutoModelForCausalLM]] = None,
+        instruct_model: Optional[Union[str, AutoModelForCausalLM]] = None,
         instruct_tokenizer: Optional[AutoTokenizer] = None,
         instruct_tokenizer_name: Optional[str] = None,
         dtype: torch.dtype = torch.float32,
@@ -109,13 +122,13 @@ class Residuals:
     ) -> "Residuals":
         # Allow passing either models or names; load if names were provided
         if base_model is None:
-            if base_model_name is None:
-                raise ValueError("Either base_model or base_model_name must be provided")
-            base_model = _load_causal_lm(base_model_name, dtype=dtype, device=device)
+            raise ValueError("base_model must be provided as a model instance or a local/hub path string")
+        if isinstance(base_model, str):
+            base_model = _load_causal_lm(base_model, dtype=dtype, device=device)
         if instruct_model is None:
-            if instruct_model_name is None:
-                raise ValueError("Either instruct_model or instruct_model_name must be provided")
-            instruct_model = _load_causal_lm(instruct_model_name, dtype=dtype, device=device)
+            raise ValueError("instruct_model must be provided as a model instance or a local/hub path string")
+        if isinstance(instruct_model, str):
+            instruct_model = _load_causal_lm(instruct_model, dtype=dtype, device=device)
 
         # Determine instruct tokenizer: auto-deduce from instruct model if not provided
         tok = instruct_tokenizer
@@ -123,10 +136,8 @@ class Residuals:
             if instruct_tokenizer_name is not None:
                 tok = AutoTokenizer.from_pretrained(instruct_tokenizer_name, use_fast=False)
             else:
-                # Try to infer from instruct model (preferred) or its name
-                inferred_name = instruct_model_name if instruct_model_name is not None else (
-                    infer_model_name(instruct_model) if instruct_model is not None else None
-                )
+                # Try to infer from instruct model instance
+                inferred_name = infer_model_name(instruct_model) if instruct_model is not None else None
                 if inferred_name is not None:
                     try:
                         tok = AutoTokenizer.from_pretrained(inferred_name, use_fast=False)
@@ -170,10 +181,8 @@ class Residuals:
                 )
             state[key] = (inst_param - base_param).to(dtype=inst_param.dtype)
         # Infer names from instances if not provided
-        if base_model_name is None and base_model is not None:
-            base_model_name = infer_model_name(base_model)
-        if instruct_model_name is None and instruct_model is not None:
-            instruct_model_name = infer_model_name(instruct_model)
+        base_model_name = infer_model_name(base_model) if base_model is not None else None
+        instruct_model_name = infer_model_name(instruct_model) if instruct_model is not None else None
 
         tok_name = instruct_tokenizer_name
         cfg = build_config(
@@ -193,7 +202,7 @@ class Residuals:
         # If path looks like a Hub repo ID (or non-existent path), download it first
         resolved_path = path
         if not os.path.isdir(path):
-            if "/" in path or path.startswith("hf://"):
+            if not _is_local_path(path) and ("/" in path or path.startswith("hf://")):
                 resolved_path = _download_from_hub(path, token=token)
 
         # Prefer safetensors (single or sharded)
@@ -233,7 +242,7 @@ class Residuals:
 
     def apply(
         self,
-        base_model: Optional[AutoModelForCausalLM] = None,
+        base_model: Optional[Union[str, AutoModelForCausalLM]] = None,
         base_tokenizer: Optional[AutoTokenizer] = None,
         instruct_tokenizer: Optional[AutoTokenizer] = None,
         base_tokenizer_name: Optional[str] = None,
@@ -241,15 +250,14 @@ class Residuals:
         out_dir: Optional[str] = None,
         scale: float = 1.0,
         normalize_embeddings: bool = True,
-        base_model_name: Optional[str] = None,
         model_dtype: torch.dtype = torch.float32,
         base_model_device: Optional[Union[str, torch.device]] = "cpu",
     ) -> AutoModelForCausalLM:
         # Optionally load the base model if not provided
         if base_model is None:
-            if base_model_name is None:
-                raise ValueError("Either base_model must be provided or base_model_name must be set")
-            base_model = _load_causal_lm(base_model_name, dtype=model_dtype, device=base_model_device)
+            raise ValueError("base_model must be provided as a model instance or a local/hub path string")
+        elif isinstance(base_model, str):
+            base_model = _load_causal_lm(base_model, dtype=model_dtype, device=base_model_device)
         # Resolve instruct tokenizer: prefer instance, then name, then stored
         if instruct_tokenizer is None:
             if instruct_tokenizer_name is not None:
